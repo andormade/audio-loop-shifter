@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+</head>
+
+<body>
+    <input type="file" id="input" accept=".wav" />
+    <input type="number" id="position" value="0" />
+    <input type="button" id="generate" value="Generate" />
+    <script>
+        function getChunkPos(wavArrayBuffer, offset, id) {
+            const dataView = new DataView(wavArrayBuffer);
+            for (let i = offset; i < dataView.byteLength; i++) {
+                if (dataView.getInt8(i) === id[0] && dataView.getInt8(i + 1) === id[1] && dataView.getInt8(i + 2) === id[2] && dataView.getInt8(i + 3) === id[3]) {
+                    return i;
+                }
+            }
+        }
+
+        function parseWav(wavArrayBuffer) {
+            const dataView = new DataView(wavArrayBuffer);
+            const fmtPos = getChunkPos(wavArrayBuffer, 0, [0x66, 0x6d, 0x74, 0x20]);
+            const numChannels = dataView.getUint16(fmtPos + 10, true);
+            const sampleRate = dataView.getInt32(fmtPos + 12, true);
+            const bitsPerSample = dataView.getInt16(fmtPos + 22, true);
+            const bytesPerSample = Math.ceil(bitsPerSample / 8);
+            const isPCM = dataView.getInt16(fmtPos + 8, true) === 1;
+            const dataPos = getChunkPos(wavArrayBuffer, fmtPos, [0x64, 0x61, 0x74, 0x61]);
+            const dataSize = dataView.getInt32(dataPos + 4, true);
+            const dataBuffer = wavArrayBuffer.slice(dataPos + 8, dataPos + 8 + dataSize);
+            const numSamples = dataSize / numChannels;
+
+            return { fmtPos, numChannels, sampleRate, bitsPerSample, isPCM, dataPos, dataSize, dataBuffer, numSamples, bytesPerSample };
+        }
+
+        function numberToBigEndianBuffer32(num) {
+            const buffer = new ArrayBuffer(4);
+            const dataView = new DataView(buffer);
+            dataView.setUint32(0, num, true);
+            return [...new Uint8Array(dataView.buffer)];
+        }
+
+        function numberToBigEndianBuffer16(num) {
+            const buffer = new ArrayBuffer(2);
+            const dataView = new DataView(buffer);
+            dataView.setUint16(0, num, true);
+            return [...new Uint8Array(dataView.buffer)];
+        }
+
+        function generateWav(dataBuffer, sampleRate, numChannels = 1, bitsPerSample = 16, audioFormat = 1) {
+
+            const size = 12 + 16 + 4 + dataBuffer.byteLength
+            const byteRate = sampleRate * 4;
+            const bytesPerSample = Math.ceil(bitsPerSample / 8);
+            const blockAlign = numChannels * bytesPerSample;
+
+            return new Int8Array([
+                0x52, // R
+                0x49, // I
+                0x46, // F
+                0x46, // F
+                ...numberToBigEndianBuffer32(size),
+                0x57, // W
+                0x41, // A
+                0x56, // V
+                0x45, // E
+                0x66, // f
+                0x6d, // m
+                0x74, // t
+                0x20, //
+                ...numberToBigEndianBuffer32(16), // fmt chunk size
+                ...numberToBigEndianBuffer16(audioFormat),
+                ...numberToBigEndianBuffer16(numChannels),
+                ...numberToBigEndianBuffer32(sampleRate),
+                ...numberToBigEndianBuffer32(byteRate),
+                ...numberToBigEndianBuffer16(blockAlign),
+                ...numberToBigEndianBuffer16(bitsPerSample),
+                0x64, // d
+                0x61, // a
+                0x74, // t
+                0x61, // a
+                ...numberToBigEndianBuffer32(dataBuffer.byteLength),
+                ...dataBuffer,
+            ]);
+        }
+
+        const reader = new FileReader();
+
+        function handleFiles() {
+            reader.readAsArrayBuffer(this.files[0]);
+        }
+
+        function onGenerateClick() {
+            const position = parseInt(document.getElementById("position").value, 10) || 0;
+            const wav = parseWav(reader.result);
+            console.log(wav);
+
+            if (!wav.isPCM || wav.numChannels !== 1 || wav.bitsPerSample !== 16) {
+                alert("Sorry, it only supports PCM format WAV files with a bit depth of 16 bits and a maximum of 1 channel (mono)");
+                return;
+            }
+
+            if (position > wav.numSamples) {
+                alert("Position overflow. The loaded file contains only " + wav.numSamples + " samples.");
+            }
+
+            const shiftedBuffer = new Int8Array([
+                ...new Int8Array(wav.dataBuffer).slice(position * wav.numChannels * wav.bytesPerSample),
+                ...new Int8Array(wav.dataBuffer).slice(0, Math.max((position * wav.numChannels * wav.bytesPerSample) - 1, 0)),
+            ]);
+
+            const buffer = generateWav(shiftedBuffer, wav.sampleRate);
+            const blob = new Blob([buffer], { type: 'octet/stream' });
+            const url = URL.createObjectURL(blob);
+
+            document.body.appendChild(document.createElement('br'));
+
+            const audio = document.createElement('audio');
+            document.body.appendChild(audio);
+            audio.setAttribute('controls', 'controls');
+            audio.src = url;
+
+            const a = document.createElement('a');
+            document.body.appendChild(a);
+            a.href = url;
+            a.innerText = "download";
+            a.download = 'loop' + position + '.wav';
+        }
+
+        const inputElement = document.getElementById("input");
+        const generateButton = document.getElementById("generate");
+
+        generateButton.addEventListener("click", onGenerateClick);
+        inputElement.addEventListener("change", handleFiles, false);
+    </script>
+</body>
+
+</html>
